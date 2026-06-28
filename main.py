@@ -1,3 +1,5 @@
+import zipfile
+import shutil
 import discord
 from discord.ext import commands
 import asyncio
@@ -1033,10 +1035,25 @@ class CheckerSession:
         
         embed.set_footer(text=f"Session ID: {self.session_id}")
         
-        try:
-            await self.ctx.send(embed=embed)
-        except Exception as e:
-            print(f"Failed to send status update: {e}")
+         await self.ctx.send(embed=embed)
+    # ZIP and send results
+    try:
+        results_dir = f"results/{self.session_id}"
+        zip_path = f"{results_dir}.zip"
+        
+        # Create ZIP file
+        shutil.make_archive(results_dir, 'zip', f"results", self.session_id)
+        
+        # Send ZIP file
+        if os.path.exists(zip_path):
+            await self.ctx.send(file=discord.File(zip_path, filename=f"results_{self.session_id}.zip"))
+            
+            # Cleanup
+            os.remove(zip_path)
+    except Exception as e:
+        print(f"Error sending results ZIP: {e}")
+except Exception as e:
+    print(f"Failed to send final summary: {e}")
 
     async def run_checker(self):
         """Run the checker in a separate thread"""
