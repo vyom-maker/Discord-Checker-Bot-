@@ -2903,8 +2903,8 @@ async def check(interaction: discord.Interaction, threads: int, proxy_type: str,
     await interaction.response.defer()
     
     # Validate threads
-    if threads < 1 or threads > 50:
-        await interaction.followup.send("❌ Threads must be between 1 and 50")
+    if threads < 50 or threads > 100:
+        await interaction.followup.send("❌ Threads must be between 50 and 100")
         return
     
     # Validate proxy type
