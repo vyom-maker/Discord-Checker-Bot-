@@ -370,7 +370,7 @@ def ms_login_session(email, password, session, proxies_list):
                 break
         # Fallback: check response body
         if not access_token:
-            m = re.search(r"access_token["'\s]*[:=]["'\s]*([^&"'\s,}]+)", r2.text)
+            m = re.search(r'access_token["\'\s]*[:=]["\'\s]*([^&"\'\s,}]+)', r2.text)
             if m:
                 access_token = m.group(1)
 
